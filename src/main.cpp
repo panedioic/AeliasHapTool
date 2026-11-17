@@ -121,6 +121,34 @@ static std::vector<std::string> DEVICES;
 static int g_lastExitCode = 0;
 
 // ============================================================
+// Home Directory
+// ============================================================
+
+// 工作主目录，启动时初始化：优先取环境变量 AHT_HOME，
+// 未指定时默认 $HOME/.ahthome（HOME 也没有则退回当前目录）
+static std::string AHT_HOME;
+
+void initAhtHome() {
+    const char* env = std::getenv("AHT_HOME");
+
+    if (env && env[0] != '\0') {
+        AHT_HOME = env;
+        return;
+    }
+
+    const char* home = std::getenv("HOME");
+
+    if (home && home[0] != '\0') {
+        AHT_HOME = std::string(home) + "/.ahthome";
+        return;
+    }
+
+    AHT_HOME = ".";
+    std::cerr << "Warning: neither AHT_HOME nor HOME is set, "
+              << "AHT_HOME falls back to cwd\n";
+}
+
+// ============================================================
 // Input Helpers
 // ============================================================
 
@@ -477,6 +505,8 @@ bool handleCommand(const std::vector<std::string>& tokens) {
 // ============================================================
 
 int main(int argc, char* argv[]) {
+    initAhtHome();
+
     // 带参数：单次执行模式 —— argv[1..] 视为一条完整命令，执行完即退出
     if (argc > 1) {
         std::vector<std::string> tokens(argv + 1, argv + argc);
@@ -498,6 +528,7 @@ int main(int argc, char* argv[]) {
     // 无参数：交互式 REPL
     std::cout << "HAPTool started.\n";
     std::cout << "hdc: libhdc.so (in-process)\n";
+    std::cout << "AHT_HOME: " << AHT_HOME << '\n';
     std::cout << "Type 'help' to see available commands.\n";
 
     std::string command;
