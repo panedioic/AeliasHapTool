@@ -1,0 +1,10 @@
+# 构建产物
+/build/
+
+# 上游源码与源码包（scripts/*.sh 的 src 阶段 clone / 下载；上游只读）
+/thirdparty/developtools_hdc/
+/thirdparty/developtools_hapsigner/
+/thirdparty/developtools_packing_tool/
+/thirdparty/*.tar.gz
+/thirdparty/*.tar.bz2
+/thirdparty/*.tar.xz
