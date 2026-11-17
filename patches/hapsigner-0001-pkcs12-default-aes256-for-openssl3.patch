@@ -1,0 +1,20 @@
+--- a/utils/src/key_store_helper.cpp
++++ b/utils/src/key_store_helper.cpp
+@@ -594,7 +594,7 @@
+     PKCS12_SAFEBAG* bag = NULL;
+ 
+     if (!certNid) {
+-        certNid = NID_PBE_CBC;
++        certNid = NID_aes_256_cbc;
+     }
+     SetNidMac(keyNid, iter, macStatus);
+     if (!pkey || !cert) {
+@@ -633,7 +633,7 @@
+ void KeyStoreHelper::SetNidMac(int& nidKey, int& iter, int& macStatus)
+ {
+     if (!nidKey) {
+-        nidKey = NID_TRIPLEDES_CBC;
++        nidKey = NID_aes_256_cbc;
+     }
+ 
+     if (!iter) {

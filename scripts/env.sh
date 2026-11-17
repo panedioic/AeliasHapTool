@@ -87,16 +87,21 @@ prepare_src() {
     log "build：源码副本 $3 → $2"
 }
 
-# 打补丁：正向能打就打、已打过就跳过、两边都不通就报错  $1=副本目录
+# 打补丁：正向能打就打、已打过就跳过、两边都不通就报错
+#   $1=副本目录  $2=补丁名前缀过滤（如 hapsigner/packing；缺省=全部）
 apply_patches() {
-    local dir="$1" p
+    local dir="$1" want="${2:-}" p base
     shopt -s nullglob
     for p in "$SPEC"/patches/*.patch; do
+        base="$(basename "$p")"
+        if [ -n "$want" ] && [[ "$base" != "$want-"* ]]; then
+            continue
+        fi
         if patch -p1 -d "$dir" --dry-run --silent < "$p" >/dev/null 2>&1; then
-            log "build：打补丁 $(basename "$p")"
+            log "build：打补丁 $base"
             patch -p1 -d "$dir" < "$p" >/dev/null
         elif patch -p1 -R -d "$dir" --dry-run --silent < "$p" >/dev/null 2>&1; then
-            log "build：已是打过补丁的状态，跳过 $(basename "$p")"
+            log "build：已是打过补丁的状态，跳过 $base"
         else
             shopt -u nullglob
             err "build：补丁既不能正向也不能反向应用（上游代码变过？）：$p"

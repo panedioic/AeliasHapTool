@@ -5,7 +5,7 @@
 local work="$BUILD/packing_tool/src"
 local out="$OUT/app_packing_tool"
 prepare_src "$UP_PACKING/packing_tool/frameworks" "$work" "packing_tool/frameworks"
-apply_patches "$work"
+apply_patches "$work" "packing"
 local SRC="$work"
 local COMPAT="$SPEC/compat/packing_tool"
 local TP="$SPEC/third_party"

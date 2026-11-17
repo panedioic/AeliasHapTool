@@ -32,16 +32,19 @@ OPENSSL_VER="3.0.22"
 LIBUV_VER="1.53.0"
 LIBUSB_VER="1.0.30"
 LZ4_VER="1.9.4"
+ZLIB_VER="1.3.1"
 OPENSSL_TGZ="$THIRD_PARTY/openssl-$OPENSSL_VER.tar.gz"
 LIBUV_TGZ="$THIRD_PARTY/libuv-$LIBUV_VER.tar.gz"
 LIBUSB_TGZ="$THIRD_PARTY/libusb-$LIBUSB_VER.tar.bz2"
 LZ4_TGZ="$THIRD_PARTY/lz4-$LZ4_VER.tar.gz"
+ZLIB_TGZ="$THIRD_PARTY/zlib-$ZLIB_VER.tar.gz"
 OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VER/openssl-$OPENSSL_VER.tar.gz"
 # libuv 的 release 不带 tarball 资产，用 github 自动打包的 archive（无 configure，
 # 但有 meson.build —— 系统里没有 autotools，有 meson/ninja，走 meson）
 LIBUV_URL="https://github.com/libuv/libuv/archive/refs/tags/v$LIBUV_VER.tar.gz"
 LIBUSB_URL="https://github.com/libusb/libusb/releases/download/v$LIBUSB_VER/libusb-$LIBUSB_VER.tar.bz2"
 LZ4_URL="https://github.com/lz4/lz4/releases/download/v$LZ4_VER/lz4-$LZ4_VER.tar.gz"
+ZLIB_URL="https://github.com/madler/zlib/releases/download/v$ZLIB_VER/zlib-$ZLIB_VER.tar.gz"
 
 fetch() {   # $1=目标tarball $2=url $3=显示名
     [ -s "$1" ] && { log "src：已有 $(basename "$1")，跳过"; return 0; }
@@ -55,6 +58,7 @@ do_src() {
     fetch "$LIBUV_TGZ" "$LIBUV_URL" "libuv-v$LIBUV_VER"
     fetch "$LIBUSB_TGZ" "$LIBUSB_URL" "libusb-$LIBUSB_VER"
     fetch "$LZ4_TGZ" "$LZ4_URL" "lz4-$LZ4_VER"
+    fetch "$ZLIB_TGZ" "$ZLIB_URL" "zlib-$ZLIB_VER"
 }
 
 select_toolchain() {
@@ -138,6 +142,29 @@ build_lz4() {
         || { cat "$SRC/lz4/make.log" 2>/dev/null; err "build：lz4 编译失败"; }
 }
 
+# zlib 只用 minizip/hapsigner 需要的 inflate/deflate 一族，手工编 + ar：
+# zlib 的 configure 对 SDK clang 交叉目标不友好，tarball 里自带预生成 zconf.h
+build_zlib() {
+    [ -f "$DEPS/lib/libz.a" ] && { log "build：zlib 已就位，跳过"; return 0; }
+    log "build：zlib-$ZLIB_VER（手工编 + ar）"
+    rm -rf "$SRC/zlib"
+    mkdir -p "$SRC/zlib"
+    tar -xzf "$ZLIB_TGZ" -C "$SRC/zlib" --strip-components=1
+    ( cd "$SRC/zlib"
+      mkdir -p objs
+      local zobjs=() f
+      for f in adler32 compress crc32 deflate gzclose gzlib gzread gzwrite \
+               infback inflate inffast inftrees trees uncompr zutil; do
+          $DEPS_CC -O2 -fPIC -I. -c "$f.c" -o "objs/$f.o"
+          zobjs+=("objs/$f.o")
+      done
+      ar rcs libz.a "${zobjs[@]}"
+      mkdir -p "$DEPS/lib" "$DEPS/include"
+      cp libz.a "$DEPS/lib/"
+      cp zlib.h zconf.h "$DEPS/include/" ) \
+        || err "build：zlib 编译失败"
+}
+
 # libusb 只装头文件（两种 include 写法都桥接好）：ohos 用 compat 里的 stub 实现，
 # linux 编真库
 install_libusb_headers() {
@@ -158,11 +185,13 @@ do_build() {
             build_libuv
             build_libusb
             build_lz4
+            build_zlib
             ;;
         ohos)
             # libuv：直链 SDK sysroot 的 libuv.so；libusb：compat stub（设备上无 USB host 场景）
             build_openssl
             build_lz4
+            build_zlib
             install_libusb_headers
             ;;
     esac
