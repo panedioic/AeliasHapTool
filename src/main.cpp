@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cctype>
 #include <cstdlib>
 #include <sstream>
 #include <fstream>
@@ -37,6 +38,7 @@
 #include "aht_hap.h"
 #include "aht_sign.h"
 #include "aht_store.h"
+#include "aht_template.h"
 
 namespace fs = std::filesystem;
 
@@ -321,6 +323,9 @@ void showHelp() {
     std::cout << "device list                      : 列出设备\n";
     std::cout << "device connect [ip:port]         : tconn 连接\n";
     std::cout << "device shell <command...>        : 设备上执行命令\n";
+    std::cout << "===== template =====\n";
+    std::cout << "template <path> [bundle] [apiVersion]  : 生成 C++ (NAPI) 空 HAP 工程\n";
+    std::cout << "        [--name entry] [--app-name X] [--model 5.0.0] [--force]\n";
     std::cout << "===== misc =====\n";
     std::cout << "help / quit\n";
     std::cout << "AHT_HOME=" << AHT_HOME << '\n';
@@ -806,6 +811,95 @@ void handleSignImport(const Args& args) {
 }
 
 // ============================================================
+// Command Handlers — template
+// ============================================================
+
+void handleTemplate(const Args& args) {
+    if (args.positional.empty()) {
+        std::cerr << "Usage: template <path> [bundle] [apiVersion]\n";
+        std::cerr << "       [--name entry] [--app-name X] [--model 5.0.0] [--force]\n";
+        g_lastExitCode = 1;
+        return;
+    }
+
+    aht::TemplateOptions opts;
+    opts.path = args.positional[0];
+    opts.apiVersion = args.positional.size() > 2 ? args.positional[2] : "";
+    std::string rawApi = opts.apiVersion;
+    opts.apiVersion = aht::normalizeApiVersion(rawApi);
+
+    bool unmapped = !rawApi.empty()
+                 && rawApi.find('(') == std::string::npos
+                 && opts.apiVersion == rawApi;
+    opts.moduleName = args.get("name", "entry");
+    opts.modelVersion = args.get("model", "5.0.0");
+    opts.force = args.has("force");
+
+    // 工程名取目录名（去掉尾部 /）
+    std::string dirName = opts.path;
+
+    while (dirName.size() > 1 && dirName.back() == '/') {
+        dirName.pop_back();
+    }
+
+    size_t slash = dirName.find_last_of('/');
+    dirName = slash == std::string::npos ? dirName : dirName.substr(slash + 1);
+
+    if (dirName.empty() || dirName == ".") {
+        char cwd[1024] = "";
+
+        if (getcwd(cwd, sizeof(cwd))) {
+            std::string full = cwd;
+            size_t s = full.find_last_of('/');
+            dirName = s == std::string::npos ? full : full.substr(s + 1);
+        }
+    }
+
+    // 显示名与 bundle 的默认值
+    opts.appName = args.get("app-name", dirName.empty() ? "HapApp" : dirName);
+
+    if (args.positional.size() > 1) {
+        opts.bundle = args.positional[1];
+    } else {
+        std::string slug;
+
+        for (char c : dirName) {
+            slug += (std::isalnum(static_cast<unsigned char>(c)) || c == '_') ? c : '_';
+        }
+
+        if (slug.empty()) {
+            slug = "app";
+        }
+
+        opts.bundle = "com.example." + slug;
+    }
+
+    int fileCount = 0;
+    std::string error;
+
+    if (!aht::createProject(opts, fileCount, error)) {
+        std::cerr << "生成失败：" << error << '\n';
+        g_lastExitCode = 1;
+        return;
+    }
+
+    std::cout << "工程已生成：" << opts.path << "（" << fileCount << " 个文件）\n";
+    std::cout << "  bundleName : " << opts.bundle << '\n';
+    std::cout << "  模块名     : " << opts.moduleName << '\n';
+    std::cout << "  apiVersion : " << opts.apiVersion << '\n';
+    std::cout << "  modelVer   : " << opts.modelVersion << '\n';
+
+    if (unmapped) {
+        std::cout << "  注意：API " << rawApi
+                  << " 不在已知映射表中，已原样写入；若构建报 api version illegal，"
+                  << "请改用完整串（如 6.1.1(24)）\n";
+    }
+    std::cout << "\n下一步：\n";
+    std::cout << "  cd " << opts.path << " && hvigorw assembleHap\n";
+    std::cout << "  haptool hap sign-install <产物.hap>\n";
+}
+
+// ============================================================
 // Command Handlers — hap (sign / install / ...)
 // ============================================================
 
@@ -1161,6 +1255,11 @@ bool handleCommand(const std::vector<std::string>& tokens) {
             unknownCommand();
         }
 
+        return true;
+    }
+
+    if (cmd == "template" || cmd == "init") {
+        handleTemplate(args);
         return true;
     }
 

@@ -84,7 +84,8 @@ do_tool() {
 
     log "tool：编 C++ 源"
     local cxxsrc=("$ROOT/src/main.cpp" "$ROOT/src/aht_http.cpp" "$ROOT/src/aht_cloud.cpp"
-                  "$ROOT/src/aht_hap.cpp" "$ROOT/src/aht_store.cpp" "$ROOT/src/aht_sign.cpp")
+                  "$ROOT/src/aht_hap.cpp" "$ROOT/src/aht_store.cpp" "$ROOT/src/aht_sign.cpp"
+                  "$ROOT/src/aht_template.cpp")
 
     for f in "${cxxsrc[@]}"; do
         o="$OBJDIR/$(basename "$f" .cpp).o"
