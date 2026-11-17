@@ -1,3 +1,15 @@
+/*
+ * haptool — HAP 开发助手。
+ *
+ * 用法：
+ *   haptool                  无参数 → 进入交互式 REPL
+ *   haptool <cmd> [args...]  有参数 → 执行这一条命令后退出，
+ *                            退出码取 hdc 的退出码（脚本可感知成败）
+ *
+ * hdc 命令通过 fork 子进程调 libhdc.so 的 HdcLibMain 执行（hdc client 模式
+ * 结尾会 _exit(0) 且残留 getopt/libuv 全局状态，必须进程隔离）。
+ * 两种模式共用同一套命令分发；单次执行时缺的参数仍会从 stdin 问。
+ */
 
 #include <iostream>
 #include <string>
@@ -98,21 +110,15 @@ ProcessResult runHdc(const std::vector<std::string>& args) {
     return result;
 }
 
-void reportHdcResult(const ProcessResult& result) {
-    std::cout << result.stdoutText;
-
-    if (result.exitCode != 0) {
-        std::cerr << "HDC command failed. Exit code: "
-                  << result.exitCode << '\n';
-    }
-}
-
 // ============================================================
 // Application State
 // ============================================================
 
 static std::vector<std::string> SIGN_INFO;
 static std::vector<std::string> DEVICES;
+
+// 单次执行模式的进程退出码；REPL 模式不使用
+static int g_lastExitCode = 0;
 
 // ============================================================
 // Input Helpers
@@ -130,24 +136,57 @@ std::string prompt(const std::string& message) {
     return line;
 }
 
+// 取第 idx 个位置参数；没有就在 stdin 问一句。
+// 单次执行和 REPL 都能用：haptool hap install a.hap 与
+// REPL 里敲 "hap install" 再按提示输入，走的是同一份逻辑。
+std::string takeOrPrompt(const std::vector<std::string>& args, size_t idx,
+                         const std::string& message) {
+    if (args.size() > idx) {
+        return args[idx];
+    }
+
+    return prompt(message);
+}
+
+std::vector<std::string> tokenize(const std::string& line) {
+    std::vector<std::string> tokens;
+    std::istringstream stream(line);
+    std::string word;
+
+    while (stream >> word) {
+        tokens.push_back(word);
+    }
+
+    return tokens;
+}
+
 // ============================================================
 // Command Handlers
 // ============================================================
 
+void unknownCommand() {
+    std::cout << "command not found!\n";
+    g_lastExitCode = 1;
+}
+
 void showHelp() {
-    std::cout << "===== help =====\n";
+    std::cout << "Usage:\n";
+    std::cout << "  haptool                  : interactive REPL\n";
+    std::cout << "  haptool <cmd> [args...]  : run one command and exit\n";
+    std::cout << "===== commands =====\n";
     std::cout << "help            : get help\n";
     std::cout << "quit            : quit application\n";
     std::cout << "sign            : show sign commands\n";
     std::cout << "sign info       : show sign information\n";
     std::cout << "sign add        : add sign information\n";
     std::cout << "device list     : list connected devices\n";
-    std::cout << "device connect  : connect to a device (tconn ip:port)\n";
-    std::cout << "device shell    : run a shell command on device\n";
-    std::cout << "hap sign        : sign a hap package\n";
-    std::cout << "hap install     : install a hap package\n";
-    std::cout << "hap uninstall   : uninstall a bundle by name\n";
-    std::cout << "hap open        : open an app (aa start)\n";
+    std::cout << "device connect [ip:port]        : connect to a device (tconn)\n";
+    std::cout << "device shell <command...>       : run a shell command on device\n";
+    std::cout << "hap sign [hap] [signId]         : sign a hap package\n";
+    std::cout << "hap install [hap] [deviceId]    : install a hap package\n";
+    std::cout << "hap uninstall [bundle] [deviceId]: uninstall a bundle by name\n";
+    std::cout << "hap open [bundle] [ability]     : open an app (aa start)\n";
+    std::cout << "(missing args are read from stdin)\n";
 }
 
 void handleSignInfo() {
@@ -192,29 +231,59 @@ void handleDeviceList() {
     }
 }
 
-void handleDeviceConnect() {
-    std::string deviceIpHost = prompt("Please input device ip and port: ");
+void handleDeviceConnect(const std::vector<std::string>& args) {
+    std::string deviceIpHost = takeOrPrompt(args, 0, "Please input device ip and port: ");
 
     if (deviceIpHost.empty()) {
         return;
     }
 
-    reportHdcResult(runHdc({"tconn", deviceIpHost}));
+    ProcessResult result = runHdc({"tconn", deviceIpHost});
+
+    std::cout << result.stdoutText;
+
+    if (result.exitCode != 0) {
+        std::cerr << "HDC command failed. Exit code: "
+                  << result.exitCode << '\n';
+    }
 }
 
-void handleDeviceShell() {
-    std::string command = prompt("Please input shell command: ");
+void handleDeviceShell(const std::vector<std::string>& args) {
+    std::string command;
+
+    if (!args.empty()) {
+        // 余下参数按空格拼回一条命令：haptool device shell param get x
+        std::ostringstream joined;
+
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (i > 0) {
+                joined << ' ';
+            }
+            joined << args[i];
+        }
+
+        command = joined.str();
+    } else {
+        command = prompt("Please input shell command: ");
+    }
 
     if (command.empty()) {
         return;
     }
 
-    reportHdcResult(runHdc({"shell", command}));
+    ProcessResult result = runHdc({"shell", command});
+
+    std::cout << result.stdoutText;
+
+    if (result.exitCode != 0) {
+        std::cerr << "HDC command failed. Exit code: "
+                  << result.exitCode << '\n';
+    }
 }
 
-void handleHapSign() {
-    std::string hap = prompt("Please input hap path: ");
-    std::string signId = prompt("Please input sign config id: ");
+void handleHapSign(const std::vector<std::string>& args) {
+    std::string hap = takeOrPrompt(args, 0, "Please input hap path: ");
+    std::string signId = takeOrPrompt(args, 1, "Please input sign config id: ");
 
     // TODO:
     // Replace this with the actual HDC/HAP signing command.
@@ -223,47 +292,61 @@ void handleHapSign() {
     std::cout << "Sign ID: " << signId << '\n';
 }
 
-void handleHapInstall() {
-    std::string hap = prompt("Please input hap path: ");
-    std::string deviceId = prompt("Please input device id (empty = default): ");
+void handleHapInstall(const std::vector<std::string>& args) {
+    std::string hap = takeOrPrompt(args, 0, "Please input hap path: ");
+    std::string deviceId = takeOrPrompt(args, 1, "Please input device id (empty = default): ");
 
     if (hap.empty()) {
         return;
     }
 
-    std::vector<std::string> args;
+    std::vector<std::string> hdcArgs;
 
     if (!deviceId.empty()) {
-        args = {"-t", deviceId, "install", hap};
+        hdcArgs = {"-t", deviceId, "install", hap};
     } else {
-        args = {"install", hap};
+        hdcArgs = {"install", hap};
     }
 
-    reportHdcResult(runHdc(args));
+    ProcessResult result = runHdc(hdcArgs);
+
+    std::cout << result.stdoutText;
+
+    if (result.exitCode != 0) {
+        std::cerr << "HDC command failed. Exit code: "
+                  << result.exitCode << '\n';
+    }
 }
 
-void handleHapUninstall() {
-    std::string bundleName = prompt("Please input bundle name: ");
-    std::string deviceId = prompt("Please input device id (empty = default): ");
+void handleHapUninstall(const std::vector<std::string>& args) {
+    std::string bundleName = takeOrPrompt(args, 0, "Please input bundle name: ");
+    std::string deviceId = takeOrPrompt(args, 1, "Please input device id (empty = default): ");
 
     if (bundleName.empty()) {
         return;
     }
 
-    std::vector<std::string> args;
+    std::vector<std::string> hdcArgs;
 
     if (!deviceId.empty()) {
-        args = {"-t", deviceId, "uninstall", bundleName};
+        hdcArgs = {"-t", deviceId, "uninstall", bundleName};
     } else {
-        args = {"uninstall", bundleName};
+        hdcArgs = {"uninstall", bundleName};
     }
 
-    reportHdcResult(runHdc(args));
+    ProcessResult result = runHdc(hdcArgs);
+
+    std::cout << result.stdoutText;
+
+    if (result.exitCode != 0) {
+        std::cerr << "HDC command failed. Exit code: "
+                  << result.exitCode << '\n';
+    }
 }
 
-void handleHapOpen() {
-    std::string bundleName = prompt("Please input bundle name: ");
-    std::string abilityName = prompt("Please input ability name (default EntryAbility): ");
+void handleHapOpen(const std::vector<std::string>& args) {
+    std::string bundleName = takeOrPrompt(args, 0, "Please input bundle name: ");
+    std::string abilityName = takeOrPrompt(args, 1, "Please input ability name (default EntryAbility): ");
 
     if (bundleName.empty()) {
         return;
@@ -274,59 +357,118 @@ void handleHapOpen() {
     }
 
     // hdc shell aa start -b <bundle> -a <ability>
-    reportHdcResult(runHdc({
+    ProcessResult result = runHdc({
         "shell",
         "aa start -b " + bundleName + " -a " + abilityName
-    }));
+    });
+
+    std::cout << result.stdoutText;
+
+    if (result.exitCode != 0) {
+        std::cerr << "HDC command failed. Exit code: "
+                  << result.exitCode << '\n';
+    }
 }
 
 // ============================================================
 // Command Dispatcher
 // ============================================================
+//
+// tokens[0] 是命令动词，其余是位置参数。REPL 的一行输入和 haptool 的
+// argv[1..] 都在这里汇合，两个模式行为完全一致。
 
-bool handleCommand(const std::string& command) {
-    if (command == "quit") {
+// 返回 false 表示程序应当退出（quit）
+bool handleCommand(const std::vector<std::string>& tokens) {
+    if (tokens.empty()) {
+        return true;
+    }
+
+    const std::string& cmd = tokens[0];
+    std::vector<std::string> rest(tokens.begin() + 1, tokens.end());
+
+    if (cmd == "quit" || cmd == "exit") {
         std::cout << "bye!\n";
         return false;
     }
 
-    if (command == "help") {
+    if (cmd == "help") {
         showHelp();
-    }
-    else if (command == "sign") {
-        std::cout << "input 'sign info' or 'sign add'!\n";
-    }
-    else if (command == "sign info") {
-        handleSignInfo();
-    }
-    else if (command == "sign add") {
-        handleSignAdd();
-    }
-    else if (command == "device list") {
-        handleDeviceList();
-    }
-    else if (command == "device connect") {
-        handleDeviceConnect();
-    }
-    else if (command == "device shell") {
-        handleDeviceShell();
-    }
-    else if (command == "hap sign") {
-        handleHapSign();
-    }
-    else if (command == "hap install") {
-        handleHapInstall();
-    }
-    else if (command == "hap uninstall") {
-        handleHapUninstall();
-    }
-    else if (command == "hap open") {
-        handleHapOpen();
-    }
-    else {
-        std::cout << "command not found!\n";
+        return true;
     }
 
+    if (cmd == "sign") {
+        if (rest.empty()) {
+            std::cout << "input 'sign info' or 'sign add'!\n";
+            return true;
+        }
+
+        std::vector<std::string> sub(rest.begin() + 1, rest.end());
+
+        if (rest[0] == "info") {
+            handleSignInfo();
+        }
+        else if (rest[0] == "add") {
+            handleSignAdd();
+        }
+        else {
+            unknownCommand();
+        }
+
+        return true;
+    }
+
+    if (cmd == "device") {
+        if (rest.empty()) {
+            unknownCommand();
+            return true;
+        }
+
+        std::vector<std::string> sub(rest.begin() + 1, rest.end());
+
+        if (rest[0] == "list") {
+            handleDeviceList();
+        }
+        else if (rest[0] == "connect") {
+            handleDeviceConnect(sub);
+        }
+        else if (rest[0] == "shell") {
+            handleDeviceShell(sub);
+        }
+        else {
+            unknownCommand();
+        }
+
+        return true;
+    }
+
+    if (cmd == "hap") {
+        if (rest.empty()) {
+            unknownCommand();
+            return true;
+        }
+
+        std::vector<std::string> sub(rest.begin() + 1, rest.end());
+
+        if (rest[0] == "sign") {
+            handleHapSign(sub);
+        }
+        else if (rest[0] == "install") {
+            handleHapInstall(sub);
+        }
+        else if (rest[0] == "uninstall") {
+            handleHapUninstall(sub);
+        }
+        else if (rest[0] == "open") {
+            handleHapOpen(sub);
+        }
+        else {
+            unknownCommand();
+        }
+
+        return true;
+    }
+
+    unknownCommand();
     return true;
 }
 
@@ -334,7 +476,26 @@ bool handleCommand(const std::string& command) {
 // Main
 // ============================================================
 
-int main() {
+int main(int argc, char* argv[]) {
+    // 带参数：单次执行模式 —— argv[1..] 视为一条完整命令，执行完即退出
+    if (argc > 1) {
+        std::vector<std::string> tokens(argv + 1, argv + argc);
+
+        try {
+            handleCommand(tokens);
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error: " << e.what() << '\n';
+
+            if (g_lastExitCode == 0) {
+                g_lastExitCode = 1;
+            }
+        }
+
+        return g_lastExitCode;
+    }
+
+    // 无参数：交互式 REPL
     std::cout << "HAPTool started.\n";
     std::cout << "hdc: libhdc.so (in-process)\n";
     std::cout << "Type 'help' to see available commands.\n";
@@ -350,7 +511,7 @@ int main() {
         }
 
         try {
-            if (!handleCommand(command)) {
+            if (!handleCommand(tokenize(command))) {
                 break;
             }
         }
