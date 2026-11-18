@@ -19,6 +19,9 @@ const std::set<std::string>& aclWhitelist()
     static const std::set<std::string> kList = {
         "ohos.permission.READ_WRITE_DESKTOP_DIRECTORY",
         "ohos.permission.kernel.ALLOW_WRITABLE_CODE_MEMORY",
+        // JIT 全开（可写可执行内存双门）需要它，与上面那条成对出现；
+        // 白名单漏了它时 Profile 不带这条 ACL，装机报 9568289 grant failed。
+        "ohos.permission.kernel.DISABLE_CODE_MEMORY_PROTECTION",
         "ohos.permission.READ_WRITE_DOCUMENTS_DIRECTORY",
         "ohos.permission.CUSTOM_SANDBOX",
         "ohos.permission.READ_PASTEBOARD",
